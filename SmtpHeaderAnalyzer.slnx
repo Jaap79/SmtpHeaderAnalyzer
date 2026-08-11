@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/SmtpHeaderAnalyzer/SmtpHeaderAnalyzer.csproj" />
+  <Project Path="tests/SmtpHeaderAnalyzer.Tests/SmtpHeaderAnalyzer.Tests.csproj" />
+</Solution>

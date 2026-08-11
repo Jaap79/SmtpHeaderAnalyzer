@@ -1,0 +1,17 @@
+Received: from mx.receiver.example (mx.receiver.example [203.0.113.20]) by final.example with ESMTPS id BBB for <analyst@final.example>; Tue, 11 Aug 2026 10:02:10 +0200
+Received: from sender.example (sender.example [198.51.100.44]) by mx.receiver.example with ESMTPSA (TLS1_3 cipher=TLS_AES_256_GCM_SHA384) id AAA; Tue, 11 Aug 2026 10:01:00 +0200
+Authentication-Results: mx.receiver.example; spf=pass smtp.mailfrom=mailer.example; dkim=pass header.d=example.com header.s=s1; dmarc=pass header.from=example.com
+Received-SPF: pass (mx.receiver.example: domain of bounce@mailer.example designates 198.51.100.44 as permitted sender) envelope-from=bounce@mailer.example
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=s1; h=from:to:subject:date; bh=abc; b=def
+From: Alice <alice@example.com>
+Reply-To: Support <support@lookalike.test>
+Return-Path: <bounce@mailer.example>
+To: Analyst <analyst@final.example>
+Subject: Representatieve offline headeranalyse
+Date: Tue, 11 Aug 2026 10:00:50 +0200
+Message-ID: <abc@example.com>
+X-MS-Exchange-Organization-SCL: 5
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Deze body wordt door de analyzer niet gelezen.
