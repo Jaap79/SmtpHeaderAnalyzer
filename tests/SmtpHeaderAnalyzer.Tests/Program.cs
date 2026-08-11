@@ -199,11 +199,13 @@ static void TestUiRender()
             Render(window, Path.Combine(output, "smtp-header-analyzer-dark.png"));
             var darkAbout = new SmtpHeaderAnalyzer.AboutWindow();
             Render(darkAbout, Path.Combine(output, "smtp-header-analyzer-about-dark.png"));
+            AssertUpdateControlsFit(darkAbout);
             ThemeService.Apply(false);
             ((Button)window.FindName("ThemeButton")).Content = "Donker thema";
             Render(window, Path.Combine(output, "smtp-header-analyzer-light.png"));
             var lightAbout = new SmtpHeaderAnalyzer.AboutWindow();
             Render(lightAbout, Path.Combine(output, "smtp-header-analyzer-about-light.png"));
+            AssertUpdateControlsFit(lightAbout);
             app.Shutdown();
         }
         catch (Exception exception)
@@ -217,13 +219,27 @@ static void TestUiRender()
     if (failure is not null) throw new InvalidOperationException("UI-rendering mislukte.", failure);
 }
 
+static void AssertUpdateControlsFit(SmtpHeaderAnalyzer.AboutWindow window)
+{
+    var root = (FrameworkElement)window.Content;
+    var updateButton = (Button)window.FindName("UpdateButton");
+    var footer = (Border)window.FindName("FooterBorder");
+    var buttonBottom = updateButton.TranslatePoint(new Point(0, updateButton.ActualHeight), root).Y;
+    var footerTop = footer.TranslatePoint(new Point(0, 0), root).Y;
+
+    True(updateButton.ActualHeight > 0);
+    True(buttonBottom <= footerTop);
+}
+
 static void Render(Window window, string path)
 {
     var root = (FrameworkElement)window.Content;
-    root.Measure(new Size(window.Width, window.Height));
-    root.Arrange(new Rect(0, 0, window.Width, window.Height));
+    var clientWidth = Math.Max(1, window.Width - (SystemParameters.ResizeFrameVerticalBorderWidth * 2));
+    var clientHeight = Math.Max(1, window.Height - SystemParameters.WindowCaptionHeight - (SystemParameters.ResizeFrameHorizontalBorderHeight * 2));
+    root.Measure(new Size(clientWidth, clientHeight));
+    root.Arrange(new Rect(0, 0, clientWidth, clientHeight));
     root.UpdateLayout();
-    var bitmap = new RenderTargetBitmap((int)window.Width, (int)window.Height, 96, 96, PixelFormats.Pbgra32);
+    var bitmap = new RenderTargetBitmap((int)Math.Ceiling(clientWidth), (int)Math.Ceiling(clientHeight), 96, 96, PixelFormats.Pbgra32);
     bitmap.Render(root);
     var encoder = new PngBitmapEncoder();
     encoder.Frames.Add(BitmapFrame.Create(bitmap));
