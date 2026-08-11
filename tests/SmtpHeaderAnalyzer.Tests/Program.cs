@@ -18,10 +18,13 @@ var tests = new (string Name, Action Run)[]
     ("SPF DKIM DMARC extractie", TestAuthentication),
     ("Identity alignment bevindingen", TestIdentityMismatch),
     ("DSN foutafhandeling", TestDeliveryFailure),
+    ("SCL BCL PCL en filterverdicts", TestSpamIndicators),
+    ("Ongeldige headerregels met brondetails", TestInvalidHeaderLines),
     ("Dubbele From detectie", TestDuplicateFrom),
     ("EML leest alleen headers", TestEmlInput),
     ("MSG leest transportheaders zonder RTF", TestMsgInput),
     ("Volledige CSV export", TestCsvExport),
+    ("Opgemaakte PDF export", TestPdfExport),
     ("Kali Timeline CSV met UTC vooraan", TestTimelineCsvExport),
     ("Versievergelijking updatecontrole", TestVersionComparison),
     ("Zoeken door volledige resultaatregels", TestSearchRows),
@@ -100,8 +103,31 @@ static void TestIdentityMismatch()
 
 static void TestDeliveryFailure()
 {
-    var analysis = Analyze("\nDiagnostic-Code: smtp; 550 5.1.1 User unknown\nAction: failed\nFinal-Recipient: rfc822; nobody@example.net");
-    True(analysis.Findings.Count(item => item.Title.StartsWith("Afleverfout")) == 2);
+    var analysis = Analyze("\nDiagnostic-Code: smtp; 550 5.1.1 User unknown\nDiagnostic-Code: smtp; 535 5.7.8 Authentication credentials invalid\nAction: failed\nFinal-Recipient: rfc822; nobody@example.net");
+    True(analysis.Findings.Any(item => item.Title == "Afleveractie: failed" && item.Severity == FindingSeverity.Critical));
+    True(analysis.Findings.Any(item => item.Title == "Enhanced status 5.1.1" && item.Explanation.Contains("Bestemmingsmailbox")));
+    True(analysis.Findings.Any(item => item.Title == "SMTP-reply 550"));
+    True(analysis.Findings.Any(item => item.Title == "Enhanced status 5.7.8" && item.Explanation.Contains("authenticatiegegevens")));
+}
+
+static void TestSpamIndicators()
+{
+    var analysis = Analyze("\nX-Forefront-Antispam-Report: SCL:5;SFV:SPM;CAT:SPM;IPV:NLI\nX-Microsoft-Antispam: BCL:7\nX-MS-Exchange-Organization-PCL: 5");
+    True(analysis.SpamIndicators.Any(item => item.Name == "SCL" && item.NumericValue == 5 && item.Severity == FindingSeverity.Warning));
+    True(analysis.SpamIndicators.Any(item => item.Name == "BCL" && item.NumericValue == 7 && item.Severity == FindingSeverity.Critical));
+    True(analysis.SpamIndicators.Any(item => item.Name == "PCL" && item.NumericValue == 5 && item.Verdict.Contains("phishing")));
+    True(analysis.Findings.Any(item => item.Title.StartsWith("Spamindicator SCL:")));
+    var source = analysis.Headers.Single(item => item.Name == "X-Forefront-Antispam-Report");
+    Equal(FindingSeverity.Critical, source.RelatedSeverity);
+}
+
+static void TestInvalidHeaderLines()
+{
+    var analysis = Analyze("\nHeader zonder dubbele punt\n Vervolg zonder geldig veld");
+    Equal(2, analysis.InvalidHeaderLines.Count);
+    True(analysis.InvalidHeaderLines[0].Reason.Contains("Dubbele punt"));
+    True(analysis.InvalidHeaderLines[1].Reason.Contains("Vervolgregel"));
+    True(analysis.Findings.Any(item => item.Title == "Ongeldige headerregels" && item.Evidence.Contains("regel 12")));
 }
 
 static void TestDuplicateFrom()
@@ -143,12 +169,28 @@ static void TestMsgInput()
 
 static void TestCsvExport()
 {
-    var csv = ReportService.ToCsv(Analyze());
+    var analysis = Analyze("\nX-MS-Exchange-Organization-SCL: 5\nOnjuist");
+    var csv = ReportService.ToCsv(analysis);
     True(csv.StartsWith("record_type,sequence,timestamp_utc,category", StringComparison.Ordinal));
     True(csv.Contains("route_hop,1,2026-08-11T08:01:00.000Z"));
     True(csv.Contains("authentication"));
     True(csv.Contains("finding"));
+    True(csv.Contains("spam_indicator"));
+    True(csv.Contains("invalid_header_line"));
+    var text = ReportService.ToText(analysis);
+    True(text.Contains("SPAM- EN DREIGINGSINDICATOREN"));
+    True(text.Contains("ONGELDIGE HEADERREGELS"));
+    True(text.Contains("ALLE HEADERS"));
     File.WriteAllText(Path.Combine(QaOutputDirectory(), "smtp-header-analysis.csv"), csv, new UTF8Encoding(false));
+}
+
+static void TestPdfExport()
+{
+    var path = Path.Combine(QaOutputDirectory(), "smtp-header-analyse-v0.99.pdf");
+    PdfReportService.Write(Analyze("\nX-Forefront-Antispam-Report: SCL:7;SFV:SPM;CAT:SPM\nOnjuiste headerregel"), path);
+    var bytes = File.ReadAllBytes(path);
+    True(bytes.Length > 10_000);
+    Equal("%PDF", Encoding.ASCII.GetString(bytes, 0, 4));
 }
 
 static void TestTimelineCsvExport()
@@ -217,9 +259,14 @@ static void TestUiRender()
                 (DataGrid)window.FindName("RouteGrid"),
                 (DataGrid)window.FindName("AuthenticationGrid"),
                 (DataGrid)window.FindName("TransportGrid"),
-                (DataGrid)window.FindName("HeadersGrid")
+                (DataGrid)window.FindName("HeadersGrid"),
+                (DataGrid)window.FindName("InvalidHeaderGrid")
             };
             True(grids.All(grid => grid.IsReadOnly));
+            True(grids.All(grid => grid.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled));
+            var headersGrid = (DataGrid)window.FindName("HeadersGrid");
+            Equal(TextWrapping.Wrap, ((Style)((DataGridTextColumn)headersGrid.Columns[2]).ElementStyle!).Setters.OfType<Setter>().Where(item => item.Property == TextBlock.TextWrappingProperty).Select(item => item.Value).Cast<TextWrapping>().Single());
+            True(app.Resources[typeof(ToolTip)] is not null || app.Resources.Values.OfType<Style>().Any(style => style.TargetType == typeof(ToolTip)));
 
             var tabs = (TabControl)window.FindName("ResultsTabControl");
             var routeGrid = (DataGrid)window.FindName("RouteGrid");
@@ -252,6 +299,10 @@ static void TestUiRender()
             var findingContainer = (ListViewItem)findingsList.ItemContainerGenerator.ContainerFromItem(findingsList.SelectedItem);
             True(SearchVisual.GetIsCurrent(findingContainer));
 
+            tabs.SelectedIndex = 5;
+            Layout(window);
+            Render(window, Path.Combine(output, "smtp-header-analyzer-semantic-headers-dark.png"));
+
             tabs.SelectedIndex = 1;
             Layout(window);
 
@@ -260,6 +311,7 @@ static void TestUiRender()
             ((Button)darkSearch.FindName("NextButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Render(window, Path.Combine(output, "smtp-header-analyzer-search-result-dark.png"));
             Render(darkSearch, Path.Combine(output, "smtp-header-analyzer-search-dark.png"));
+            RenderTooltip("Exporteer een opgemaakt PDF-rapport (Ctrl+P)", Path.Combine(output, "smtp-header-analyzer-tooltip-dark.png"));
             var darkAbout = new SmtpHeaderAnalyzer.AboutWindow();
             Render(darkAbout, Path.Combine(output, "smtp-header-analyzer-about-dark.png"));
             AssertUpdateControlsFit(darkAbout);
@@ -267,9 +319,13 @@ static void TestUiRender()
             ((Button)window.FindName("ThemeButton")).Content = "Donker thema";
             Render(window, Path.Combine(output, "smtp-header-analyzer-light.png"));
             Render(window, Path.Combine(output, "smtp-header-analyzer-search-result-light.png"));
+            tabs.SelectedIndex = 5;
+            Layout(window);
+            Render(window, Path.Combine(output, "smtp-header-analyzer-semantic-headers-light.png"));
             var lightSearch = new SmtpHeaderAnalyzer.SearchWindow(window);
             ((TextBox)lightSearch.FindName("SearchTextBox")).Text = "mx.receiver.example";
             Render(lightSearch, Path.Combine(output, "smtp-header-analyzer-search-light.png"));
+            RenderTooltip("Exporteer een opgemaakt PDF-rapport (Ctrl+P)", Path.Combine(output, "smtp-header-analyzer-tooltip-light.png"));
             var lightAbout = new SmtpHeaderAnalyzer.AboutWindow();
             Render(lightAbout, Path.Combine(output, "smtp-header-analyzer-about-light.png"));
             AssertUpdateControlsFit(lightAbout);
@@ -284,6 +340,20 @@ static void TestUiRender()
     thread.Start();
     thread.Join();
     if (failure is not null) throw new InvalidOperationException("UI-rendering mislukte.", failure);
+}
+
+static void RenderTooltip(string text, string path)
+{
+    var tooltip = new ToolTip { Content = text, Style = (Style)Application.Current.FindResource(typeof(ToolTip)) };
+    tooltip.Measure(new Size(600, 100));
+    tooltip.Arrange(new Rect(0, 0, tooltip.DesiredSize.Width, tooltip.DesiredSize.Height));
+    tooltip.UpdateLayout();
+    var bitmap = new RenderTargetBitmap((int)Math.Ceiling(tooltip.ActualWidth), (int)Math.Ceiling(tooltip.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+    bitmap.Render(tooltip);
+    var encoder = new PngBitmapEncoder();
+    encoder.Frames.Add(BitmapFrame.Create(bitmap));
+    using var stream = File.Create(path);
+    encoder.Save(stream);
 }
 
 static void AssertUpdateControlsFit(SmtpHeaderAnalyzer.AboutWindow window)

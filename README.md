@@ -11,11 +11,14 @@ Windows-tool voor lokale analyse van ruwe SMTP-headers, `.eml`- en Outlook `.msg
 - `From`, `Sender`, `Reply-To`, `Return-Path`, ontvangers en envelope-adressen;
 - SPF, DKIM, DMARC, ARC, CompAuth en `Received-SPF` uit aangeleverde resultaten;
 - TLS-versie, cipher en SMTP-transporttype voor zover in headers vastgelegd;
-- afwijkende domeinen, dubbele kernheaders, tijdlijnproblemen, ontbrekende controles en DSN/foutafhandeling;
-- JSON-, tekst- en genormaliseerde CSV-export;
+- afwijkende domeinen, dubbele kernheaders, tijdlijnproblemen, ontbrekende controles en DSN/foutafhandeling met uitleg van herkende SMTP- en enhanced statuscodes;
+- expliciete SCL-, BCL-, PCL-, SFV- en CAT-duiding en herkenning van gangbare SpamAssassin- en Rspamd-scores, inclusief beleids- en drempelcaveats;
+- concrete regelnummers, redenen en broninhoud voor ongeldige RFC 5322-headerregels;
+- JSON-, tekst-, genormaliseerde CSV- en opgemaakte PDF-export; de PDF gebruikt staande analysepagina's en een liggende bronbijlage;
 - Kali Timeline Tool-CSV met één event per hop, `timestamp` als eerste kolom en tijden genormaliseerd naar UTC;
 - volledig read-only analyseresultaten: dubbelklikken selecteert een regel maar opent nooit edit-mode;
 - zoeken in de actieve resultaatweergave met `Ctrl+F`, vorige/volgende treffer en tijdelijke regelmarkeringen die niet in de analyse of exports terechtkomen;
+- automatisch afbreken van lange waarden en consistente groen/oranje/rode bevindingmarkeringen in gerelateerde resultaatregels;
 - donkere en lichte Windows-interface.
 
 ## Privacy en netwerkgebruik
@@ -49,4 +52,4 @@ Meld kwetsbaarheden niet in een publieke issue. Volg [SECURITY.md](SECURITY.md).
 
 ## Licentie
 
-De applicatiecode valt onder de MIT License. OpenMcdf valt onder MPL-2.0; zie [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+De applicatiecode valt onder de MIT License. OpenMcdf valt onder MPL-2.0; PDFsharp/MigraDoc valt onder MIT. Zie [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

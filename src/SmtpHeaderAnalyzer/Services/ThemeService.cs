@@ -23,6 +23,9 @@ public static class ThemeService
 
         resources["SearchCurrentBrush"] = Brush(darkMode ? "#5C3A1E" : "#FFE0C2");
         resources["SearchMarkBrush"] = Brush(darkMode ? "#4F471D" : "#FFF0A6");
+        resources["SemanticGoodBrush"] = Brush(darkMode ? "#173B31" : "#D8F5E9");
+        resources["SemanticWarningBrush"] = Brush(darkMode ? "#4A351F" : "#FFE8C7");
+        resources["SemanticDangerBrush"] = Brush(darkMode ? "#4A2329" : "#FFDADF");
 
         foreach (Window window in Application.Current.Windows)
         {

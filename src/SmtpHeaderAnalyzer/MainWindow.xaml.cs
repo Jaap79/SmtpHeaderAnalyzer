@@ -141,6 +141,30 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ReportService.ToCsv(Analysis));
     }
 
+    private void ExportPdf_Click(object sender, RoutedEventArgs e)
+    {
+        if (Analysis is null) return;
+        var dialog = new SaveFileDialog
+        {
+            Title = "Exporteer opgemaakt PDF-rapport",
+            Filter = "PDF-rapport (*.pdf)|*.pdf",
+            FileName = $"smtp-header-analyse-{DateTime.Now:yyyyMMdd-HHmmss}.pdf",
+            AddExtension = true,
+            OverwritePrompt = true
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            PdfReportService.Write(Analysis, dialog.FileName);
+            StatusText = $"PDF-rapport opgeslagen: {dialog.FileName}";
+        }
+        catch (Exception exception)
+        {
+            ShowError("PDF kan niet worden gemaakt", exception.Message);
+        }
+    }
+
     private void ExportTimelineCsv_Click(object sender, RoutedEventArgs e)
     {
         if (Analysis is null) return;
@@ -199,6 +223,11 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.S && HasAnalysis)
         {
             Export_Click(this, new RoutedEventArgs());
+            e.Handled = true;
+        }
+        else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.P && HasAnalysis)
+        {
+            ExportPdf_Click(this, new RoutedEventArgs());
             e.Handled = true;
         }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.C && HasAnalysis)
@@ -378,6 +407,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             3 => ("Transport", TransportGrid),
             4 => ("Bevindingen", (ItemsControl)FindingsList),
             5 => ("Alle headers", HeadersGrid),
+            6 => ("Ongeldige headerregels", InvalidHeaderGrid),
             _ => ("Huidige weergave", (ItemsControl)IdentityGrid)
         };
         return new SearchScope(name, control, control.Items.Cast<object>().ToList());

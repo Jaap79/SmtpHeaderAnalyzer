@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:conv="clr-namespace:SmtpHeaderAnalyzer.Converters"
         xmlns:local="clr-namespace:SmtpHeaderAnalyzer"
+        xmlns:models="clr-namespace:SmtpHeaderAnalyzer.Models"
         Title="SMTP Header Analyzer" Width="1480" Height="900" MinWidth="1120" MinHeight="680"
         WindowStartupLocation="CenterScreen" AllowDrop="True"
         DragOver="Window_DragOver" Drop="Window_Drop" SourceInitialized="Window_SourceInitialized"
@@ -42,6 +43,7 @@
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Content="Open bestand" Click="OpenFile_Click" ToolTip="Open EML of MSG (Ctrl+O)" Margin="0,0,8,0"/>
                     <Button Content="JSON / TXT" Click="Export_Click" IsEnabled="{Binding HasAnalysis}" ToolTip="Exporteer alle analysegegevens (Ctrl+S)" Margin="0,0,8,0"/>
+                    <Button Content="PDF" Click="ExportPdf_Click" IsEnabled="{Binding HasAnalysis}" ToolTip="Exporteer een opgemaakt PDF-rapport (Ctrl+P)" Margin="0,0,8,0"/>
                     <Button Content="CSV" Click="ExportCsv_Click" IsEnabled="{Binding HasAnalysis}" ToolTip="Exporteer de volledige analyse als CSV (Ctrl+Shift+C)" Margin="0,0,8,0"/>
                     <Button Content="Timeline CSV" Click="ExportTimelineCsv_Click" IsEnabled="{Binding HasAnalysis}" ToolTip="Exporteer alle routehops met UTC-timestamp voor Kali Timeline Tool (Ctrl+Alt+C)" Margin="0,0,8,0"/>
                     <Button Content="Zoeken" Click="Search_Click" IsEnabled="{Binding HasAnalysis}" ToolTip="Zoek in de huidige resultaatweergave (Ctrl+F)" Margin="0,0,8,0"/>
@@ -147,9 +149,9 @@
                                         <DataGrid x:Name="IdentityGrid" ItemsSource="{Binding Analysis.Identities}" Height="220" Margin="0,0,0,16" LoadingRow="DataGrid_LoadingRow">
                                             <DataGrid.Columns>
                                                 <DataGridTextColumn Header="Rol" Binding="{Binding Role}" Width="105" DisplayIndex="0"/>
-                                                <DataGridTextColumn Header="Naam" Binding="{Binding DisplayName}" Width="180" DisplayIndex="1"/>
-                                                <DataGridTextColumn Header="E-mailadres" Binding="{Binding Address}" Width="*" DisplayIndex="2"/>
-                                                <DataGridTextColumn Header="Domein" Binding="{Binding Domain}" Width="220" DisplayIndex="3"/>
+                                                <DataGridTextColumn Header="Naam" Binding="{Binding DisplayName}" Width="180" DisplayIndex="1" ElementStyle="{StaticResource WrappedGridText}"/>
+                                                <DataGridTextColumn Header="E-mailadres" Binding="{Binding Address}" Width="*" MinWidth="180" DisplayIndex="2" ElementStyle="{StaticResource WrappedGridText}"/>
+                                                <DataGridTextColumn Header="Domein" Binding="{Binding Domain}" Width="220" DisplayIndex="3" ElementStyle="{StaticResource WrappedGridText}"/>
                                             </DataGrid.Columns>
                                         </DataGrid>
                                         <TextBlock Text="INTERPRETATIE VAN DE OORSPRONG" Style="{StaticResource SectionTitle}"/>
@@ -164,9 +166,9 @@
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="#" Binding="{Binding Number}" Width="42"/>
                                         <DataGridTextColumn Header="Timestamp (lokaal)" Binding="{Binding TimestampDisplay, Mode=OneWay}" Width="185"/>
-                                        <DataGridTextColumn Header="Van" Binding="{Binding From}" Width="*"/>
-                                        <DataGridTextColumn Header="Naar" Binding="{Binding By}" Width="*"/>
-                                        <DataGridTextColumn Header="Protocol" Binding="{Binding With}" Width="130"/>
+                                        <DataGridTextColumn Header="Van" Binding="{Binding From}" Width="*" MinWidth="140" ElementStyle="{StaticResource WrappedGridText}"/>
+                                        <DataGridTextColumn Header="Naar" Binding="{Binding By}" Width="*" MinWidth="140" ElementStyle="{StaticResource WrappedGridText}"/>
+                                        <DataGridTextColumn Header="Protocol" Binding="{Binding With}" Width="130" ElementStyle="{StaticResource WrappedGridText}"/>
                                         <DataGridTextColumn Header="IP" Binding="{Binding IpAddress}" Width="140"/>
                                         <DataGridTextColumn Header="Delta" Binding="{Binding DelayDisplay}" Width="85"/>
                                     </DataGrid.Columns>
@@ -177,10 +179,10 @@
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="Mechanisme" Binding="{Binding Mechanism}" Width="145"/>
                                         <DataGridTextColumn Header="Resultaat" Binding="{Binding Result}" Width="105"/>
-                                        <DataGridTextColumn Header="Domein" Binding="{Binding Domain}" Width="190"/>
-                                        <DataGridTextColumn Header="Identiteit" Binding="{Binding Identity}" Width="210"/>
-                                        <DataGridTextColumn Header="Selector" Binding="{Binding Selector}" Width="135"/>
-                                        <DataGridTextColumn Header="Details" Binding="{Binding Details}" Width="*"/>
+                                        <DataGridTextColumn Header="Domein" Binding="{Binding Domain}" Width="190" ElementStyle="{StaticResource WrappedGridText}"/>
+                                        <DataGridTextColumn Header="Identiteit" Binding="{Binding Identity}" Width="210" ElementStyle="{StaticResource WrappedGridText}"/>
+                                        <DataGridTextColumn Header="Selector" Binding="{Binding Selector}" Width="135" ElementStyle="{StaticResource WrappedGridText}"/>
+                                        <DataGridTextColumn Header="Details" Binding="{Binding Details}" Width="*" MinWidth="220" ElementStyle="{StaticResource WrappedGridText}"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
                             </TabItem>
@@ -188,12 +190,12 @@
                                 <DataGrid x:Name="TransportGrid" ItemsSource="{Binding Analysis.Transport}" Margin="16" LoadingRow="DataGrid_LoadingRow">
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="Hop" Binding="{Binding Hop}" Width="48"/>
-                                        <DataGridTextColumn Header="Van" Binding="{Binding From}" Width="*"/>
-                                        <DataGridTextColumn Header="Naar" Binding="{Binding By}" Width="*"/>
+                                        <DataGridTextColumn Header="Van" Binding="{Binding From}" Width="*" MinWidth="120" ElementStyle="{StaticResource WrappedGridText}"/>
+                                        <DataGridTextColumn Header="Naar" Binding="{Binding By}" Width="*" MinWidth="120" ElementStyle="{StaticResource WrappedGridText}"/>
                                         <DataGridTextColumn Header="SMTP" Binding="{Binding Protocol}" Width="125"/>
                                         <DataGridTextColumn Header="TLS" Binding="{Binding TlsVersion}" Width="100"/>
-                                        <DataGridTextColumn Header="Cipher" Binding="{Binding Cipher}" Width="190"/>
-                                        <DataGridTextColumn Header="Status" Binding="{Binding EncryptionStatus}" Width="170"/>
+                                        <DataGridTextColumn Header="Cipher" Binding="{Binding Cipher}" Width="190" ElementStyle="{StaticResource WrappedGridText}"/>
+                                        <DataGridTextColumn Header="Status" Binding="{Binding EncryptionStatus}" Width="170" ElementStyle="{StaticResource WrappedGridText}"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
                             </TabItem>
@@ -220,6 +222,9 @@
                                                 </Setter.Value>
                                             </Setter>
                                             <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Severity}" Value="{x:Static models:FindingSeverity.Good}"><Setter Property="Background" Value="{DynamicResource SemanticGoodBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource GoodBrush}"/><Setter Property="BorderThickness" Value="3,1,1,1"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding Severity}" Value="{x:Static models:FindingSeverity.Warning}"><Setter Property="Background" Value="{DynamicResource SemanticWarningBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource WarningBrush}"/><Setter Property="BorderThickness" Value="3,1,1,1"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding Severity}" Value="{x:Static models:FindingSeverity.Critical}"><Setter Property="Background" Value="{DynamicResource SemanticDangerBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource DangerBrush}"/><Setter Property="BorderThickness" Value="3,1,1,1"/></DataTrigger>
                                                 <Trigger Property="IsMouseOver" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/></Trigger>
                                                 <Trigger Property="IsSelected" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderThickness" Value="2,1,1,1"/></Trigger>
                                                 <Trigger Property="local:SearchVisual.IsMarked" Value="True"><Setter Property="Background" Value="{DynamicResource SearchMarkBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource WarningBrush}"/><Setter Property="BorderThickness" Value="3,1,1,1"/></Trigger>
@@ -237,6 +242,7 @@
                                                         <TextBlock Text="{Binding Title}" FontWeight="SemiBold"/>
                                                         <TextBlock Text="{Binding Explanation}" TextWrapping="Wrap" Margin="0,3,0,0"/>
                                                         <TextBlock Text="{Binding Evidence}" Style="{StaticResource MutedText}" FontFamily="Cascadia Mono, Consolas" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0"/>
+                                                        <TextBlock Text="{Binding StandardsReference, StringFormat=Referentie: {0}}" Style="{StaticResource MutedText}" FontSize="10.5" TextWrapping="Wrap" Margin="0,5,0,0"/>
                                                     </StackPanel>
                                                 </Grid>
                                             </DataTemplate>
@@ -247,10 +253,23 @@
                                 <DataGrid x:Name="HeadersGrid" ItemsSource="{Binding Analysis.Headers}" Margin="16" LoadingRow="DataGrid_LoadingRow">
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="#" Binding="{Binding Index}" Width="42"/>
-                                        <DataGridTextColumn Header="Header" Binding="{Binding Name}" Width="220"/>
-                                        <DataGridTextColumn Header="Waarde" Binding="{Binding DisplayValue}" Width="*"/>
+                                        <DataGridTextColumn Header="Header" Binding="{Binding Name}" Width="220" ElementStyle="{StaticResource WrappedGridText}"/>
+                                        <DataGridTextColumn Header="Waarde" Binding="{Binding DisplayValue}" Width="*" MinWidth="400" ElementStyle="{StaticResource WrappedGridText}"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
+                            </TabItem>
+                            <TabItem Header="Ongeldige regels">
+                                <Grid Margin="16">
+                                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                    <TextBlock Text="Regels die niet als geldige RFC 5322-headervelden konden worden geïnterpreteerd. De bronregel blijft ongewijzigd zichtbaar." Style="{StaticResource MutedText}" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <DataGrid x:Name="InvalidHeaderGrid" Grid.Row="1" ItemsSource="{Binding Analysis.InvalidHeaderLines}" LoadingRow="DataGrid_LoadingRow">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Regel" Binding="{Binding LineNumber}" Width="70"/>
+                                            <DataGridTextColumn Header="Reden" Binding="{Binding Reason}" Width="2*" MinWidth="240" ElementStyle="{StaticResource WrappedGridText}"/>
+                                            <DataGridTextColumn Header="Bronregel" Binding="{Binding Raw}" Width="3*" MinWidth="320" ElementStyle="{StaticResource WrappedGridText}"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
                             </TabItem>
                         </TabControl>
                     </Border>
@@ -262,7 +281,7 @@
             <Grid Margin="12,0">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding StatusText}" Style="{StaticResource MutedText}" VerticalAlignment="Center" FontSize="11"/>
-                <TextBlock Grid.Column="1" Text="Ctrl+O openen   Ctrl+F zoeken   Ctrl+S exporteren   Ctrl+Alt+C timeline" Style="{StaticResource MutedText}" VerticalAlignment="Center" FontSize="10"/>
+                <TextBlock Grid.Column="1" Text="Ctrl+O openen   Ctrl+F zoeken   Ctrl+S exporteren   Ctrl+P PDF   Ctrl+Alt+C timeline" Style="{StaticResource MutedText}" VerticalAlignment="Center" FontSize="10"/>
             </Grid>
         </Border>
     </Grid>

@@ -26,7 +26,9 @@ public sealed partial class HeaderAnalyzer
         ParseRoute(analysis);
         ParseAuthentication(analysis);
         ParseTransport(analysis);
+        SpamIndicatorService.Parse(analysis);
         BuildFindings(analysis);
+        ApplyRelatedSeverities(analysis);
         return analysis;
     }
 
@@ -47,8 +49,9 @@ public sealed partial class HeaderAnalyzer
             raw.Clear();
         }
 
-        foreach (var sourceLine in lines)
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
+            var sourceLine = lines[lineIndex];
             var line = sourceLine.TrimEnd('\r');
             if (line.Length == 0)
             {
@@ -56,20 +59,38 @@ public sealed partial class HeaderAnalyzer
                 continue;
             }
 
+            var lengthIssue = line.Length > 998 ? "Regel is langer dan de RFC 5322-limiet van 998 tekens." : null;
+
             if ((line[0] == ' ' || line[0] == '\t') && name is not null)
             {
+                if (lengthIssue is not null) analysis.InvalidHeaderLines.Add(new InvalidHeaderLine(lineIndex + 1, lengthIssue, line));
                 value.Append(' ').Append(line.Trim());
                 raw.AppendLine(line);
                 continue;
             }
 
-            var colon = line.IndexOf(':');
-            if (colon <= 0 || !HeaderNameRegex().IsMatch(line[..colon]))
+            if (line[0] == ' ' || line[0] == '\t')
             {
                 Flush();
-                analysis.InvalidLineCount++;
+                analysis.InvalidHeaderLines.Add(new InvalidHeaderLine(lineIndex + 1, CombineReasons(lengthIssue, "Vervolgregel zonder voorafgaand headerveld."), line));
                 continue;
             }
+
+            var colon = line.IndexOf(':');
+            if (colon <= 0)
+            {
+                Flush();
+                analysis.InvalidHeaderLines.Add(new InvalidHeaderLine(lineIndex + 1, CombineReasons(lengthIssue, colon == 0 ? "Lege veldnaam vóór de dubbele punt." : "Dubbele punt tussen veldnaam en veldwaarde ontbreekt."), line));
+                continue;
+            }
+            if (!HeaderNameRegex().IsMatch(line[..colon]))
+            {
+                Flush();
+                analysis.InvalidHeaderLines.Add(new InvalidHeaderLine(lineIndex + 1, CombineReasons(lengthIssue, "Veldnaam bevat spaties, niet-ASCII- of andere ongeldige tekens."), line));
+                continue;
+            }
+
+            if (lengthIssue is not null) analysis.InvalidHeaderLines.Add(new InvalidHeaderLine(lineIndex + 1, lengthIssue, line));
 
             Flush();
             name = line[..colon];
@@ -80,6 +101,8 @@ public sealed partial class HeaderAnalyzer
 
         if (analysis.Headers.Count == 0) throw new InvalidDataException("Geen geldige mailheaders gevonden.");
     }
+
+    private static string CombineReasons(params string?[] reasons) => string.Join(" ", reasons.Where(reason => !string.IsNullOrWhiteSpace(reason)));
 
     private static void ParseSummary(MailAnalysis analysis)
     {
@@ -201,42 +224,52 @@ public sealed partial class HeaderAnalyzer
     {
         AddAuthFindings(analysis);
         AddIdentityFindings(analysis);
+        AddSpamFindings(analysis);
+        AddDeliveryStatusFindings(analysis);
 
         if (analysis.Route.Count == 0)
         {
-            Add(analysis, FindingSeverity.Warning, "Geen Received-route", "De serverroute en oorsprong zijn niet vast te stellen.", "Received ontbreekt.");
+            Add(analysis, FindingSeverity.Warning, "Geen Received-route", "De serverroute en oorsprong zijn niet vast te stellen.", "Received ontbreekt.", standardsReference: "RFC 5321 section 4.4 / RFC 5322 section 3.6.7");
         }
         else
         {
-            Add(analysis, FindingSeverity.Info, "Oorsprong is een onderbouwde claim", analysis.OriginExplanation, analysis.ClaimedOrigin);
+            Add(analysis, FindingSeverity.Info, "Oorsprong is een onderbouwde claim", analysis.OriginExplanation, analysis.ClaimedOrigin,
+                standardsReference: "RFC 5321 section 4.4 / RFC 5322 section 3.6.7",
+                relatedHeaderIndexes: analysis.Headers.Where(item => item.Name.Equals("Received", StringComparison.OrdinalIgnoreCase)).Select(item => item.Index),
+                relatedRouteHops: analysis.Route.Select(item => item.Number), relatedTransportHops: analysis.Transport.Select(item => item.Hop));
         }
 
         foreach (var hop in analysis.Route.Where(item => item.Delay is { TotalSeconds: < -5 }))
         {
-            Add(analysis, FindingSeverity.Warning, "Niet-monotone tijdlijn", $"Hop {hop.Number} ligt eerder dan de voorgaande hop. Mogelijke klokafwijking of gemanipuleerde header.", hop.Raw);
+            Add(analysis, FindingSeverity.Warning, "Niet-monotone tijdlijn", $"Hop {hop.Number} ligt eerder dan de voorgaande hop. Mogelijke klokafwijking of gemanipuleerde header.", hop.Raw,
+                standardsReference: "RFC 5321 section 4.4", relatedHeaderIndexes: HeaderIndexesForRaw(analysis, hop.Raw), relatedRouteHops: [hop.Number], relatedTransportHops: [hop.Number]);
         }
         foreach (var hop in analysis.Route.Where(item => item.Delay is { TotalMinutes: > 15 }))
         {
-            Add(analysis, FindingSeverity.Warning, "Opvallende bezorgvertraging", $"Tussen hop {hop.Number - 1} en {hop.Number} zit {hop.DelayDisplay}.", hop.Raw);
+            Add(analysis, FindingSeverity.Warning, "Opvallende bezorgvertraging", $"Tussen hop {hop.Number - 1} en {hop.Number} zit {hop.DelayDisplay}.", hop.Raw,
+                standardsReference: "RFC 5321 section 4.4", relatedHeaderIndexes: HeaderIndexesForRaw(analysis, hop.Raw), relatedRouteHops: [hop.Number], relatedTransportHops: [hop.Number]);
         }
 
         var dateHeaders = All(analysis, "Date").ToList();
-        if (dateHeaders.Count == 0) Add(analysis, FindingSeverity.Warning, "Date ontbreekt", "De verzendtijd is niet aanwezig.", "Geen Date-header.");
-        if (All(analysis, "From").Count() > 1) Add(analysis, FindingSeverity.Critical, "Meerdere From-headers", "Meerdere auteurvelden zijn verdacht en kunnen parsingverschillen uitlokken.", string.Join(" | ", All(analysis, "From")));
-        if (All(analysis, "Message-ID").Count() > 1) Add(analysis, FindingSeverity.Warning, "Meerdere Message-ID-headers", "De mail bevat meerdere unieke identifiers.", string.Join(" | ", All(analysis, "Message-ID")));
-        if (analysis.InvalidLineCount > 0) Add(analysis, FindingSeverity.Warning, "Ongeldige headerregels", $"{analysis.InvalidLineCount} regel(s) konden niet als RFC-header worden geïnterpreteerd.", "Bekijk Alle headers voor de brondata.");
-
-        foreach (var header in analysis.Headers.Where(item => item.Name.Equals("Diagnostic-Code", StringComparison.OrdinalIgnoreCase) || item.Name.Equals("Status", StringComparison.OrdinalIgnoreCase) || item.Name.Equals("Action", StringComparison.OrdinalIgnoreCase) || item.Name.Equals("X-Failed-Recipients", StringComparison.OrdinalIgnoreCase)))
+        if (dateHeaders.Count == 0) Add(analysis, FindingSeverity.Warning, "Date ontbreekt", "De verzendtijd is niet aanwezig.", "Geen Date-header.", standardsReference: "RFC 5322 section 3.6");
+        if (All(analysis, "From").Count() > 1) Add(analysis, FindingSeverity.Critical, "Meerdere From-headers", "Meerdere auteurvelden zijn verdacht en kunnen parsingverschillen uitlokken.", string.Join(" | ", All(analysis, "From")), standardsReference: "RFC 5322 section 3.6.2", relatedHeaderIndexes: HeaderIndexes(analysis, "From"), relatedIdentityRoles: ["From"]);
+        if (All(analysis, "Message-ID").Count() > 1) Add(analysis, FindingSeverity.Warning, "Meerdere Message-ID-headers", "De mail bevat meerdere unieke identifiers.", string.Join(" | ", All(analysis, "Message-ID")), standardsReference: "RFC 5322 section 3.6.4", relatedHeaderIndexes: HeaderIndexes(analysis, "Message-ID"));
+        if (analysis.InvalidLineCount > 0)
         {
-            Add(analysis, FindingSeverity.Critical, $"Afleverfout: {header.Name}", "De mail bevat DSN- of foutafhandelingsinformatie.", header.Value);
+            var evidence = string.Join(" | ", analysis.InvalidHeaderLines.Take(8).Select(item => $"regel {item.LineNumber}: {item.Reason} [{Flatten(item.Raw, 140)}]"));
+            if (analysis.InvalidLineCount > 8) evidence += $" | plus {analysis.InvalidLineCount - 8} andere regel(s)";
+            Add(analysis, FindingSeverity.Warning, "Ongeldige headerregels", $"{analysis.InvalidLineCount} regel(s) schenden de veldsyntaxis of regellimiet.", evidence, standardsReference: "RFC 5322 sections 2.1.1, 2.2 en 3.6");
         }
-        foreach (var header in analysis.Headers.Where(item => item.Name.Contains("Spam", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("Antispam", StringComparison.OrdinalIgnoreCase) || item.Name.Equals("X-MS-Exchange-Organization-SCL", StringComparison.OrdinalIgnoreCase)))
+
+        foreach (var header in analysis.Headers.Where(item => (item.Name.Contains("Spam", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("Antispam", StringComparison.OrdinalIgnoreCase)) && analysis.SpamIndicators.All(indicator => indicator.HeaderIndex != item.Index)))
         {
-            Add(analysis, FindingSeverity.Info, $"Filtermetadata: {header.Name}", "Lokale spam- of transportclassificatie aangetroffen.", header.Value);
+            Add(analysis, FindingSeverity.Info, $"Filtermetadata: {header.Name}", "Lokale spam- of transportclassificatie aangetroffen, maar zonder publiek gestandaardiseerde score die veilig kan worden geïnterpreteerd.", header.Value,
+                standardsReference: "Leveranciersspecifieke header", relatedHeaderIndexes: [header.Index]);
         }
         if (analysis.Headers.Any(item => item.Name.Equals("X-Analyzer-Warning", StringComparison.OrdinalIgnoreCase)))
         {
-            Add(analysis, FindingSeverity.Warning, "MSG bevat geen transportheaders", "Alleen opgeslagen MAPI-velden konden worden gelezen; route- en authenticatieanalyse is hierdoor onvolledig.", First(analysis, "X-Analyzer-Warning") ?? string.Empty);
+            Add(analysis, FindingSeverity.Warning, "MSG bevat geen transportheaders", "Alleen opgeslagen MAPI-velden konden worden gelezen; route- en authenticatieanalyse is hierdoor onvolledig.", First(analysis, "X-Analyzer-Warning") ?? string.Empty,
+                standardsReference: "Microsoft MAPI PR_TRANSPORT_MESSAGE_HEADERS", relatedHeaderIndexes: HeaderIndexes(analysis, "X-Analyzer-Warning"));
         }
 
         if (!analysis.Findings.Any(item => item.Severity is FindingSeverity.Critical or FindingSeverity.Warning))
@@ -252,15 +285,22 @@ public sealed partial class HeaderAnalyzer
             var checks = analysis.Authentication.Where(item => item.Mechanism.Equals(mechanism, StringComparison.OrdinalIgnoreCase)).ToList();
             if (checks.Any(item => item.IsPass))
             {
-                Add(analysis, FindingSeverity.Good, $"{mechanism} geslaagd", "De ontvangende infrastructuur rapporteert een geldige controle.", string.Join(" | ", checks.Where(item => item.IsPass).Select(item => item.Details)));
+                Add(analysis, FindingSeverity.Good, $"{mechanism} geslaagd", "De ontvangende infrastructuur rapporteert een geldige controle.", string.Join(" | ", checks.Where(item => item.IsPass).Select(item => item.Details)),
+                    standardsReference: mechanism == "SPF" ? "RFC 7208 section 8 / RFC 8601" : "RFC 8601",
+                    relatedHeaderIndexes: AuthHeaderIndexes(analysis, mechanism),
+                    relatedAuthenticationMechanisms: [mechanism]);
             }
             else if (checks.Any(item => IsFailure(item.Result)))
             {
-                Add(analysis, FindingSeverity.Critical, $"{mechanism} mislukt", "De ontvangende infrastructuur rapporteert een negatieve authenticatie-uitkomst.", string.Join(" | ", checks.Select(item => $"{item.Result}: {item.Details}")));
+                Add(analysis, FindingSeverity.Critical, $"{mechanism} mislukt", "De ontvangende infrastructuur rapporteert een negatieve authenticatie-uitkomst.", string.Join(" | ", checks.Select(item => $"{item.Result}: {item.Details}")),
+                    standardsReference: mechanism == "SPF" ? "RFC 7208 section 8 / RFC 8601" : "RFC 8601",
+                    relatedHeaderIndexes: AuthHeaderIndexes(analysis, mechanism),
+                    relatedAuthenticationMechanisms: [mechanism]);
             }
             else if (checks.Count == 0)
             {
-                Add(analysis, FindingSeverity.Warning, $"Geen {mechanism}-resultaat", "Deze aangeleverde headers bevatten geen verifieerbaar resultaat. Offline wordt geen DNS-hercontrole uitgevoerd.", "Authentication-Results/Received-SPF bevat geen resultaat.");
+                Add(analysis, FindingSeverity.Warning, $"Geen {mechanism}-resultaat", "Deze aangeleverde headers bevatten geen verifieerbaar resultaat. Offline wordt geen DNS-hercontrole uitgevoerd.", "Authentication-Results/Received-SPF bevat geen resultaat.",
+                    standardsReference: mechanism == "SPF" ? "RFC 7208 / RFC 8601" : "RFC 8601");
             }
         }
     }
@@ -270,7 +310,7 @@ public sealed partial class HeaderAnalyzer
         var from = analysis.Identities.FirstOrDefault(item => item.Role.Equals("From", StringComparison.OrdinalIgnoreCase));
         if (from is null)
         {
-            Add(analysis, FindingSeverity.Critical, "From ontbreekt", "Er is geen zichtbare auteurheader.", "Geen From-header.");
+            Add(analysis, FindingSeverity.Critical, "From ontbreekt", "Er is geen zichtbare auteurheader.", "Geen From-header.", standardsReference: "RFC 5322 section 3.6.2");
             return;
         }
 
@@ -278,12 +318,55 @@ public sealed partial class HeaderAnalyzer
         var replyTo = analysis.Identities.FirstOrDefault(item => item.Role.Equals("Reply-To", StringComparison.OrdinalIgnoreCase));
         if (returnPath is not null && !DomainsAlign(from.Domain, returnPath.Domain))
         {
-            Add(analysis, FindingSeverity.Warning, "From en Return-Path wijken af", "De zichtbare afzender en envelope sender gebruiken niet-uitgelijnde domeinen. Dit kan legitiem zijn bij verzendplatformen.", $"From={from.Address}; Return-Path={returnPath.Address}");
+            Add(analysis, FindingSeverity.Warning, "From en Return-Path wijken af", "De zichtbare afzender en envelope sender gebruiken niet-uitgelijnde domeinen. Dit kan legitiem zijn bij verzendplatformen.", $"From={from.Address}; Return-Path={returnPath.Address}",
+                standardsReference: "RFC 5322 section 3.6.2 / RFC 5321 section 4.4", relatedHeaderIndexes: HeaderIndexes(analysis, "From").Concat(HeaderIndexes(analysis, "Return-Path")), relatedIdentityRoles: ["From", "Return-Path"]);
         }
         if (replyTo is not null && !DomainsAlign(from.Domain, replyTo.Domain))
         {
-            Add(analysis, FindingSeverity.Warning, "Reply-To wijkt af", "Antwoorden worden naar een ander, niet-uitgelijnd domein gestuurd.", $"From={from.Address}; Reply-To={replyTo.Address}");
+            Add(analysis, FindingSeverity.Warning, "Reply-To wijkt af", "Antwoorden worden naar een ander, niet-uitgelijnd domein gestuurd.", $"From={from.Address}; Reply-To={replyTo.Address}",
+                standardsReference: "RFC 5322 section 3.6.2", relatedHeaderIndexes: HeaderIndexes(analysis, "From").Concat(HeaderIndexes(analysis, "Reply-To")), relatedIdentityRoles: ["From", "Reply-To"]);
         }
+    }
+
+    private static void AddSpamFindings(MailAnalysis analysis)
+    {
+        foreach (var indicator in analysis.SpamIndicators)
+        {
+            var threshold = indicator.Threshold is null ? string.Empty : $"; drempel={indicator.Threshold:0.###}";
+            Add(analysis, indicator.Severity, $"Spamindicator {indicator.Name}: {indicator.Verdict}", indicator.Explanation,
+                $"{indicator.SourceHeader}: {indicator.Value}{threshold}", standardsReference: indicator.Reference,
+                relatedHeaderIndexes: [indicator.HeaderIndex]);
+        }
+    }
+
+    private static void AddDeliveryStatusFindings(MailAnalysis analysis)
+    {
+        foreach (var header in analysis.Headers.Where(item => item.Name.Equals("Action", StringComparison.OrdinalIgnoreCase)))
+        {
+            var action = header.Value.Trim().ToLowerInvariant();
+            var severity = action switch { "failed" => FindingSeverity.Critical, "delayed" => FindingSeverity.Warning, "delivered" or "relayed" or "expanded" => FindingSeverity.Good, _ => FindingSeverity.Info };
+            Add(analysis, severity, $"Afleveractie: {action}", "Een Delivery Status Notification rapporteert de afhandelingsactie voor een ontvanger.", header.Value,
+                standardsReference: "RFC 3464 section 2.3.3", relatedHeaderIndexes: [header.Index]);
+        }
+
+        foreach (var header in analysis.Headers.Where(item => item.Name.Equals("Status", StringComparison.OrdinalIgnoreCase) || item.Name.Equals("Diagnostic-Code", StringComparison.OrdinalIgnoreCase)))
+        {
+            var interpretations = DeliveryStatusCodeService.Parse(header.Value);
+            if (interpretations.Count == 0)
+            {
+                Add(analysis, FindingSeverity.Info, $"Afleverdiagnostiek: {header.Name}", "DSN-diagnostiek aangetroffen zonder herkende SMTP- of enhanced statuscode.", header.Value,
+                    standardsReference: "RFC 3464 sections 2.3.4 en 2.3.5", relatedHeaderIndexes: [header.Index]);
+                continue;
+            }
+
+            foreach (var interpretation in interpretations)
+                Add(analysis, interpretation.Severity, interpretation.Title, interpretation.Explanation, header.Value,
+                    standardsReference: interpretation.Reference, relatedHeaderIndexes: [header.Index]);
+        }
+
+        foreach (var header in analysis.Headers.Where(item => item.Name.Equals("X-Failed-Recipients", StringComparison.OrdinalIgnoreCase)))
+            Add(analysis, FindingSeverity.Critical, "Niet-afgeleverde ontvanger(s)", "De afzenderinfrastructuur meldt dat aflevering aan één of meer ontvangers is mislukt.", header.Value,
+                standardsReference: "Leveranciersspecifieke DSN-header", relatedHeaderIndexes: [header.Index]);
     }
 
     private static IEnumerable<(string DisplayName, string Address)> ParseAddresses(string value)
@@ -376,10 +459,67 @@ public sealed partial class HeaderAnalyzer
 
     private static string? First(MailAnalysis analysis, string name) => analysis.Headers.FirstOrDefault(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value;
     private static IEnumerable<string> All(MailAnalysis analysis, string name) => analysis.Headers.Where(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).Select(item => item.Value);
+    private static IEnumerable<int> HeaderIndexes(MailAnalysis analysis, string name) => analysis.Headers.Where(item => item.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).Select(item => item.Index);
+    private static IEnumerable<int> AuthHeaderIndexes(MailAnalysis analysis, string mechanism)
+    {
+        var indexes = HeaderIndexes(analysis, "Authentication-Results").Concat(HeaderIndexes(analysis, "ARC-Authentication-Results"));
+        if (mechanism.Equals("SPF", StringComparison.OrdinalIgnoreCase)) indexes = indexes.Concat(HeaderIndexes(analysis, "Received-SPF"));
+        if (mechanism.Equals("DKIM", StringComparison.OrdinalIgnoreCase)) indexes = indexes.Concat(HeaderIndexes(analysis, "DKIM-Signature"));
+        return indexes;
+    }
+    private static IEnumerable<int> HeaderIndexesForRaw(MailAnalysis analysis, string raw) => analysis.Headers.Where(item => item.Raw.Equals(raw, StringComparison.Ordinal) || item.Raw.Contains(raw, StringComparison.Ordinal) || raw.Contains(item.Raw, StringComparison.Ordinal)).Select(item => item.Index);
+    private static string Flatten(string value, int maxLength)
+    {
+        var flattened = WhitespaceRegex().Replace(value.Replace('\r', ' ').Replace('\n', ' '), " ").Trim();
+        return flattened.Length <= maxLength ? flattened : flattened[..maxLength] + "…";
+    }
     private static bool IsFailure(string value) => value.Equals("fail", StringComparison.OrdinalIgnoreCase) || value.Equals("softfail", StringComparison.OrdinalIgnoreCase) || value.Equals("temperror", StringComparison.OrdinalIgnoreCase) || value.Equals("permerror", StringComparison.OrdinalIgnoreCase);
-    private static void Add(MailAnalysis analysis, FindingSeverity severity, string title, string explanation, string evidence) => analysis.Findings.Add(new AnalysisFinding(severity, title, explanation, evidence));
+    private static void Add(
+        MailAnalysis analysis,
+        FindingSeverity severity,
+        string title,
+        string explanation,
+        string evidence,
+        string standardsReference = "",
+        IEnumerable<int>? relatedHeaderIndexes = null,
+        IEnumerable<int>? relatedRouteHops = null,
+        IEnumerable<string>? relatedIdentityRoles = null,
+        IEnumerable<string>? relatedAuthenticationMechanisms = null,
+        IEnumerable<int>? relatedTransportHops = null) =>
+        analysis.Findings.Add(new AnalysisFinding(severity, title, explanation, evidence)
+        {
+            StandardsReference = standardsReference,
+            RelatedHeaderIndexes = relatedHeaderIndexes?.Distinct().ToList() ?? [],
+            RelatedRouteHops = relatedRouteHops?.Distinct().ToList() ?? [],
+            RelatedIdentityRoles = relatedIdentityRoles?.Distinct(StringComparer.OrdinalIgnoreCase).ToList() ?? [],
+            RelatedAuthenticationMechanisms = relatedAuthenticationMechanisms?.Distinct(StringComparer.OrdinalIgnoreCase).ToList() ?? [],
+            RelatedTransportHops = relatedTransportHops?.Distinct().ToList() ?? []
+        });
 
-    private static string Normalize(string input) => input.Replace("\0", string.Empty).Replace("\r\n", "\n").Replace('\r', '\n').Trim();
+    private static void ApplyRelatedSeverities(MailAnalysis analysis)
+    {
+        foreach (var finding in analysis.Findings)
+        {
+            foreach (var header in analysis.Headers.Where(item => finding.RelatedHeaderIndexes.Contains(item.Index)))
+                header.RelatedSeverity = Strongest(header.RelatedSeverity, finding.Severity);
+            foreach (var hop in analysis.Route.Where(item => finding.RelatedRouteHops.Contains(item.Number)))
+                hop.RelatedSeverity = Strongest(hop.RelatedSeverity, finding.Severity);
+            foreach (var identity in analysis.Identities.Where(item => finding.RelatedIdentityRoles.Contains(item.Role, StringComparer.OrdinalIgnoreCase)))
+                identity.RelatedSeverity = Strongest(identity.RelatedSeverity, finding.Severity);
+            foreach (var check in analysis.Authentication.Where(item => finding.RelatedAuthenticationMechanisms.Contains(item.Mechanism, StringComparer.OrdinalIgnoreCase)))
+                check.RelatedSeverity = Strongest(check.RelatedSeverity, finding.Severity);
+            foreach (var transport in analysis.Transport.Where(item => finding.RelatedTransportHops.Contains(item.Hop)))
+                transport.RelatedSeverity = Strongest(transport.RelatedSeverity, finding.Severity);
+        }
+    }
+
+    private static FindingSeverity Strongest(FindingSeverity? current, FindingSeverity candidate)
+    {
+        static int Rank(FindingSeverity severity) => severity switch { FindingSeverity.Critical => 4, FindingSeverity.Warning => 3, FindingSeverity.Good => 2, _ => 1 };
+        return current is null || Rank(candidate) > Rank(current.Value) ? candidate : current.Value;
+    }
+
+    private static string Normalize(string input) => input.Replace("\0", string.Empty).Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n');
 
     [GeneratedRegex("^[!-9;-~]+$")]
     private static partial Regex HeaderNameRegex();

@@ -27,7 +27,9 @@ public static class ReportService
             route = analysis.Route,
             authentication = analysis.Authentication,
             transport = analysis.Transport,
+            spamIndicators = analysis.SpamIndicators,
             findings = analysis.Findings,
+            invalidHeaderLines = analysis.InvalidHeaderLines,
             headers = analysis.Headers
         };
         return JsonSerializer.Serialize(report, JsonOptions);
@@ -37,6 +39,7 @@ public static class ReportService
     {
         var builder = new StringBuilder();
         builder.AppendLine("SMTP HEADER ANALYSE");
+        builder.AppendLine($"Gegenereerd (UTC): {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
         builder.AppendLine($"Bron: {analysis.SourceLabel}");
         builder.AppendLine($"Onderwerp: {analysis.Subject}");
         builder.AppendLine($"Message-ID: {analysis.MessageId}");
@@ -47,13 +50,25 @@ public static class ReportService
         foreach (var identity in analysis.Identities) builder.AppendLine($"- {identity.Role}: {identity.Address} ({identity.Domain})");
         builder.AppendLine();
         builder.AppendLine("AUTHENTICATIE");
-        foreach (var item in analysis.Authentication) builder.AppendLine($"- {item.Mechanism}: {item.Result}; domein={item.Domain}; selector={item.Selector}");
+        foreach (var item in analysis.Authentication) builder.AppendLine($"- {item.Mechanism}: {item.Result}; domein={item.Domain}; identiteit={item.Identity}; selector={item.Selector}; {item.Details}");
+        builder.AppendLine();
+        builder.AppendLine("SPAM- EN DREIGINGSINDICATOREN");
+        if (analysis.SpamIndicators.Count == 0) builder.AppendLine("- Geen ondersteunde score- of verdictheaders aangetroffen.");
+        foreach (var item in analysis.SpamIndicators)
+            builder.AppendLine($"- [{SeverityLabel(item.Severity)}] {item.Name}={item.Value}{(item.Threshold is null ? string.Empty : $"; drempel={item.Threshold:0.###}")}: {item.Verdict}. {item.Explanation} ({item.Reference})");
         builder.AppendLine();
         builder.AppendLine("ROUTE (OUDSTE NAAR NIEUWSTE)");
         foreach (var hop in analysis.Route) builder.AppendLine($"- {hop.Number}. {hop.TimestampDisplay} | {hop.From} -> {hop.By} | {hop.With} | delta {hop.DelayDisplay}");
         builder.AppendLine();
         builder.AppendLine("BEVINDINGEN");
-        foreach (var finding in analysis.Findings) builder.AppendLine($"- [{finding.SeverityLabel}] {finding.Title}: {finding.Explanation} | {finding.Evidence}");
+        foreach (var finding in analysis.Findings) builder.AppendLine($"- [{finding.SeverityLabel}] {finding.Title}: {finding.Explanation} | bewijs: {finding.Evidence}{(string.IsNullOrWhiteSpace(finding.StandardsReference) ? string.Empty : $" | referentie: {finding.StandardsReference}")}");
+        builder.AppendLine();
+        builder.AppendLine("ONGELDIGE HEADERREGELS");
+        if (analysis.InvalidHeaderLines.Count == 0) builder.AppendLine("- Geen.");
+        foreach (var line in analysis.InvalidHeaderLines) builder.AppendLine($"- Regel {line.LineNumber}: {line.Reason} | {Flatten(line.Raw)}");
+        builder.AppendLine();
+        builder.AppendLine("ALLE HEADERS");
+        foreach (var header in analysis.Headers) builder.AppendLine($"{header.Name}: {header.Value}");
         builder.AppendLine();
         builder.AppendLine("Let op: offline headeranalyse voert geen DNS-hercontrole uit en bewijst geen legitimiteit.");
         return builder.ToString();
@@ -79,8 +94,14 @@ public static class ReportService
         foreach (var item in analysis.Transport)
             AppendCsvRow(builder, "transport", item.Hop.ToString(CultureInfo.InvariantCulture), "", "transport_security", $"Transport hop {item.Hop}", item.EncryptionStatus, "", item.From, item.By, "", "", "", "", item.Protocol, item.TlsVersion, item.Cipher, "", item.Details, item.Details);
 
+        foreach (var item in analysis.SpamIndicators)
+            AppendCsvRow(builder, "spam_indicator", item.HeaderIndex.ToString(CultureInfo.InvariantCulture), "", "spam_filtering", item.Name, item.Value, item.Verdict, "", "", "", "", "", "", "", "", "", SeverityLabel(item.Severity), $"threshold={item.Threshold:0.###}; {item.Explanation}; reference={item.Reference}", item.SourceHeader);
+
         foreach (var finding in analysis.Findings)
-            AppendCsvRow(builder, "finding", "", "", "finding", finding.Title, finding.Explanation, "", "", "", "", "", "", "", "", "", "", finding.SeverityLabel, finding.Explanation, finding.Evidence);
+            AppendCsvRow(builder, "finding", "", "", "finding", finding.Title, finding.Explanation, "", "", "", "", "", "", "", "", "", "", finding.SeverityLabel, $"{finding.Explanation}; reference={finding.StandardsReference}", finding.Evidence);
+
+        foreach (var line in analysis.InvalidHeaderLines)
+            AppendCsvRow(builder, "invalid_header_line", line.LineNumber.ToString(CultureInfo.InvariantCulture), "", "header_syntax", "Ongeldige headerregel", line.Reason, "", "", "", "", "", "", "", "", "", "", "LET OP", line.Reason, line.Raw);
 
         return builder.ToString();
     }
@@ -128,6 +149,14 @@ public static class ReportService
     private static string UtcTimestamp(DateTimeOffset? value) => value?.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture) ?? string.Empty;
 
     private static string Flatten(string value) => value.Replace("\r", string.Empty).Replace('\n', ' ').Trim();
+
+    private static string SeverityLabel(FindingSeverity severity) => severity switch
+    {
+        FindingSeverity.Critical => "KRITIEK",
+        FindingSeverity.Warning => "LET OP",
+        FindingSeverity.Good => "GOED",
+        _ => "INFO"
+    };
 
     private static void AppendCsvRow(StringBuilder builder, params string?[] values)
     {
