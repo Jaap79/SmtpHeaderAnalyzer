@@ -8,9 +8,9 @@
     <RootNamespace>SmtpHeaderAnalyzer</RootNamespace>
     <AssemblyName>SmtpHeaderAnalyzer</AssemblyName>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <Version>0.3.1</Version>
-    <AssemblyVersion>0.3.1.0</AssemblyVersion>
-    <FileVersion>0.3.1.0</FileVersion>
+    <Version>0.4.0</Version>
+    <AssemblyVersion>0.4.0.0</AssemblyVersion>
+    <FileVersion>0.4.0.0</FileVersion>
     <Product>SMTP Header Analyzer</Product>
     <Company>Open Source Security Tools</Company>
     <Description>Lokale analyse van SMTP-headers, EML- en Outlook MSG-bestanden met een optionele handmatige updatecontrole.</Description>
@@ -25,6 +25,10 @@
 
   <ItemGroup>
     <PackageReference Include="OpenMcdf" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SmtpHeaderAnalyzer.Tests" />
   </ItemGroup>
 
   <ItemGroup>

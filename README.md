@@ -14,6 +14,8 @@ Windows-tool voor lokale analyse van ruwe SMTP-headers, `.eml`- en Outlook `.msg
 - afwijkende domeinen, dubbele kernheaders, tijdlijnproblemen, ontbrekende controles en DSN/foutafhandeling;
 - JSON-, tekst- en genormaliseerde CSV-export;
 - Kali Timeline Tool-CSV met één event per hop, `timestamp` als eerste kolom en tijden genormaliseerd naar UTC;
+- volledig read-only analyseresultaten: dubbelklikken selecteert een regel maar opent nooit edit-mode;
+- zoeken in de actieve resultaatweergave met `Ctrl+F`, vorige/volgende treffer en tijdelijke regelmarkeringen die niet in de analyse of exports terechtkomen;
 - donkere en lichte Windows-interface.
 
 ## Privacy en netwerkgebruik

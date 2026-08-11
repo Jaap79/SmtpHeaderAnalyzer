@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
 using SmtpHeaderAnalyzer.Models;
@@ -15,6 +16,13 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private MailAnalysis? _analysis;
     private string _sourceLabel = "Nog niets geladen";
     private string _statusText = "Gereed — analyse vindt volledig lokaal plaats.";
+    private readonly HashSet<object> _markedSearchItems = new(ReferenceEqualityComparer.Instance);
+    private List<object> _searchMatches = [];
+    private int _searchIndex = -1;
+    private string _searchQuery = string.Empty;
+    private object? _currentSearchItem;
+    private FrameworkElement? _currentSearchContainer;
+    private SearchWindow? _searchWindow;
 
     public MainWindow()
     {
@@ -70,7 +78,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void Clear_Click(object sender, RoutedEventArgs e)
     {
         HeaderInput.Clear();
+        ResetSearchNavigation(clearMarks: true);
         Analysis = null;
+        _searchWindow?.RefreshForCurrentView();
         SourceLabel = "Nog niets geladen";
         StatusText = "Invoer en analyse gewist; er is niets opgeslagen.";
         HeaderInput.Focus();
@@ -87,6 +97,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         var dialog = new AboutWindow { Owner = this };
         dialog.ShowDialog();
+    }
+
+    private void Search_Click(object sender, RoutedEventArgs e)
+    {
+        if (!HasAnalysis) return;
+        if (_searchWindow is { IsVisible: true })
+        {
+            _searchWindow.Activate();
+            return;
+        }
+
+        _searchWindow = new SearchWindow(this);
+        _searchWindow.Show();
     }
 
     private void Export_Click(object sender, RoutedEventArgs e)
@@ -158,7 +181,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.O)
+        if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.F && HasAnalysis)
+        {
+            Search_Click(this, new RoutedEventArgs());
+            e.Handled = true;
+        }
+        else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.O)
         {
             OpenFile_Click(this, new RoutedEventArgs());
             e.Handled = true;
@@ -203,7 +231,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     {
         try
         {
+            ResetSearchNavigation(clearMarks: true);
             Analysis = _analyzer.Analyze(text, source);
+            _searchWindow?.RefreshForCurrentView();
             SourceLabel = source;
             StatusText = $"Analyse gereed — {Analysis.Headers.Count} headers, {Analysis.Route.Count} hops, {Analysis.Findings.Count} bevindingen.";
         }
@@ -220,6 +250,164 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
 
     private static bool IsSupported(string path) => Path.GetExtension(path).Equals(".eml", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(path).Equals(".msg", StringComparison.OrdinalIgnoreCase);
+
+    internal SearchNavigationState StartSearch(string query)
+    {
+        ClearCurrentSearchHighlight();
+        _searchQuery = query.Trim();
+        var scope = CurrentSearchScope();
+        _searchMatches = scope is null || string.IsNullOrEmpty(_searchQuery)
+            ? []
+            : scope.Items.Where(item => SearchService.Matches(item, _searchQuery)).ToList();
+        _searchIndex = _searchMatches.Count > 0 ? 0 : -1;
+        return CurrentSearchState(navigate: true);
+    }
+
+    internal SearchNavigationState MoveSearch(int direction)
+    {
+        if (_searchMatches.Count == 0) return CurrentSearchState(navigate: false);
+        _searchIndex = (_searchIndex + direction + _searchMatches.Count) % _searchMatches.Count;
+        return CurrentSearchState(navigate: true);
+    }
+
+    internal SearchNavigationState ToggleCurrentSearchMark()
+    {
+        if (_currentSearchItem is null) return CurrentSearchState(navigate: false);
+
+        if (!_markedSearchItems.Add(_currentSearchItem)) _markedSearchItems.Remove(_currentSearchItem);
+        if (_currentSearchContainer is not null)
+        {
+            SearchVisual.SetIsMarked(_currentSearchContainer, _markedSearchItems.Contains(_currentSearchItem));
+        }
+
+        StatusText = _markedSearchItems.Contains(_currentSearchItem)
+            ? "Zoekresultaat visueel gemarkeerd; de analysegegevens zijn niet gewijzigd."
+            : "Visuele markering verwijderd; de analysegegevens zijn niet gewijzigd.";
+        return CurrentSearchState(navigate: false);
+    }
+
+    internal SearchNavigationState ClearSearchMarksInCurrentView()
+    {
+        var scope = CurrentSearchScope();
+        if (scope is not null)
+        {
+            foreach (var item in scope.Items)
+            {
+                _markedSearchItems.Remove(item);
+                if (FindContainer(scope.Control, item, scrollIntoView: false) is { } container)
+                {
+                    SearchVisual.SetIsMarked(container, false);
+                }
+            }
+        }
+
+        StatusText = "Visuele zoekmarkeringen in de huidige weergave gewist.";
+        return CurrentSearchState(navigate: false);
+    }
+
+    internal void SearchWindowClosed(SearchWindow window)
+    {
+        if (ReferenceEquals(_searchWindow, window)) _searchWindow = null;
+    }
+
+    private SearchNavigationState CurrentSearchState(bool navigate)
+    {
+        var scope = CurrentSearchScope();
+        var viewName = scope?.Name ?? "Geen analyse";
+
+        if (navigate && _searchIndex >= 0 && _searchIndex < _searchMatches.Count && scope is not null)
+        {
+            NavigateToSearchItem(scope, _searchMatches[_searchIndex]);
+        }
+
+        var markedCount = scope?.Items.Count(_markedSearchItems.Contains) ?? 0;
+        var isMarked = _currentSearchItem is not null && _markedSearchItems.Contains(_currentSearchItem);
+        var message = string.IsNullOrEmpty(_searchQuery)
+            ? "Vul een zoekterm in. Er wordt gezocht in alle velden van de volledige regel."
+            : _searchMatches.Count == 0
+                ? $"‘{_searchQuery}’ is niet gevonden in {viewName}."
+                : $"Resultaat {_searchIndex + 1} van {_searchMatches.Count} — de volledige regel is geselecteerd{(isMarked ? " en gemarkeerd" : string.Empty)}.";
+
+        return new SearchNavigationState(viewName, _searchIndex, _searchMatches.Count, isMarked, markedCount, message);
+    }
+
+    private void NavigateToSearchItem(SearchScope scope, object item)
+    {
+        ClearCurrentSearchHighlight();
+        _currentSearchItem = item;
+
+        if (scope.Control is DataGrid dataGrid) dataGrid.SelectedItem = item;
+        if (scope.Control is ListBox listBox) listBox.SelectedItem = item;
+
+        _currentSearchContainer = FindContainer(scope.Control, item, scrollIntoView: true);
+        if (_currentSearchContainer is not null)
+        {
+            SearchVisual.SetIsMarked(_currentSearchContainer, _markedSearchItems.Contains(item));
+            SearchVisual.SetIsCurrent(_currentSearchContainer, true);
+            _currentSearchContainer.BringIntoView();
+        }
+    }
+
+    private void ClearCurrentSearchHighlight()
+    {
+        if (_currentSearchContainer is not null) SearchVisual.SetIsCurrent(_currentSearchContainer, false);
+        _currentSearchContainer = null;
+        _currentSearchItem = null;
+    }
+
+    private FrameworkElement? FindContainer(ItemsControl control, object item, bool scrollIntoView)
+    {
+        if (scrollIntoView)
+        {
+            if (control is DataGrid dataGrid) dataGrid.ScrollIntoView(item);
+            if (control is ListBox listBox) listBox.ScrollIntoView(item);
+            control.UpdateLayout();
+        }
+
+        return control.ItemContainerGenerator.ContainerFromItem(item) as FrameworkElement;
+    }
+
+    private SearchScope? CurrentSearchScope()
+    {
+        if (Analysis is null) return null;
+        var (name, control) = ResultsTabControl.SelectedIndex switch
+        {
+            0 => ("Overzicht — adressen en rollen", (ItemsControl)IdentityGrid),
+            1 => ("Route", RouteGrid),
+            2 => ("Authenticatie", AuthenticationGrid),
+            3 => ("Transport", TransportGrid),
+            4 => ("Bevindingen", (ItemsControl)FindingsList),
+            5 => ("Alle headers", HeadersGrid),
+            _ => ("Huidige weergave", (ItemsControl)IdentityGrid)
+        };
+        return new SearchScope(name, control, control.Items.Cast<object>().ToList());
+    }
+
+    private void ResultsTabControl_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, ResultsTabControl)) return;
+        ClearCurrentSearchHighlight();
+        _searchMatches = [];
+        _searchIndex = -1;
+        _searchWindow?.RefreshForCurrentView();
+    }
+
+    private void DataGrid_LoadingRow(object sender, DataGridRowEventArgs e)
+    {
+        SearchVisual.SetIsMarked(e.Row, _markedSearchItems.Contains(e.Row.Item));
+        SearchVisual.SetIsCurrent(e.Row, ReferenceEquals(e.Row.Item, _currentSearchItem));
+    }
+
+    private void ResetSearchNavigation(bool clearMarks)
+    {
+        ClearCurrentSearchHighlight();
+        _searchMatches = [];
+        _searchIndex = -1;
+        _searchQuery = string.Empty;
+        if (clearMarks) _markedSearchItems.Clear();
+    }
+
+    private sealed record SearchScope(string Name, ItemsControl Control, IReadOnlyList<object> Items);
 
     private void OnPropertyChanged([CallerMemberName] string? propertyName = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }

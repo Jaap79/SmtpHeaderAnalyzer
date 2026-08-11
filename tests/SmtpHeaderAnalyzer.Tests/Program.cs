@@ -1,3 +1,4 @@
+using SmtpHeaderAnalyzer;
 using SmtpHeaderAnalyzer.Models;
 using SmtpHeaderAnalyzer.Services;
 using System.Windows;
@@ -6,6 +7,7 @@ using System.Windows.Media.Imaging;
 using System.IO;
 using System.Reflection;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Text;
 using OpenMcdf;
 
@@ -22,6 +24,7 @@ var tests = new (string Name, Action Run)[]
     ("Volledige CSV export", TestCsvExport),
     ("Kali Timeline CSV met UTC vooraan", TestTimelineCsvExport),
     ("Versievergelijking updatecontrole", TestVersionComparison),
+    ("Zoeken door volledige resultaatregels", TestSearchRows),
     ("WPF dark/light render", TestUiRender)
 };
 
@@ -35,8 +38,8 @@ foreach (var test in tests)
     }
     catch (Exception exception)
     {
-        failures.Add($"{test.Name}: {exception.Message}");
-        Console.WriteLine($"FAIL  {test.Name}: {exception.Message}");
+        failures.Add($"{test.Name}: {exception}");
+        Console.WriteLine($"FAIL  {test.Name}: {exception}");
     }
 }
 
@@ -169,6 +172,16 @@ static void TestVersionComparison()
     True(!UpdateService.IsNewerVersion("onbekend", "v1.0.0"));
 }
 
+static void TestSearchRows()
+{
+    var analysis = new HeaderAnalyzer().Analyze(BuildHeaders());
+    True(SearchService.Matches(analysis.Route[0], "198.51.100.44"));
+    True(SearchService.Matches(analysis.Route[1], "2026-08-11"));
+    True(SearchService.Matches(analysis.Authentication[0], analysis.Authentication[0].Mechanism));
+    True(SearchService.Matches(analysis.Headers[0], analysis.Headers[0].Name));
+    True(!SearchService.Matches(analysis.Route[0], "niet-aanwezig.example"));
+}
+
 static string QaOutputDirectory()
 {
     var output = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "artifacts", "qa"));
@@ -197,12 +210,66 @@ static void TestUiRender()
                 .Invoke(window, [input.Text, "QA-voorbeeld.eml"]);
             var output = QaOutputDirectory();
             Render(window, Path.Combine(output, "smtp-header-analyzer-dark.png"));
+
+            var grids = new[]
+            {
+                (DataGrid)window.FindName("IdentityGrid"),
+                (DataGrid)window.FindName("RouteGrid"),
+                (DataGrid)window.FindName("AuthenticationGrid"),
+                (DataGrid)window.FindName("TransportGrid"),
+                (DataGrid)window.FindName("HeadersGrid")
+            };
+            True(grids.All(grid => grid.IsReadOnly));
+
+            var tabs = (TabControl)window.FindName("ResultsTabControl");
+            var routeGrid = (DataGrid)window.FindName("RouteGrid");
+            tabs.SelectedIndex = 1;
+            Layout(window);
+            routeGrid.SelectedIndex = 0;
+            routeGrid.CurrentCell = new DataGridCellInfo(routeGrid.Items[0], routeGrid.Columns[1]);
+            True(!routeGrid.BeginEdit());
+            Equal(BindingMode.OneWay, ((Binding)((DataGridTextColumn)routeGrid.Columns[1]).Binding).Mode);
+
+            var firstSearch = window.StartSearch("mx.receiver.example");
+            Equal(2, firstSearch.Count);
+            Equal(0, firstSearch.Index);
+            var firstRow = (DataGridRow)routeGrid.ItemContainerGenerator.ContainerFromItem(routeGrid.Items[0]);
+            True(SearchVisual.GetIsCurrent(firstRow));
+            var analysisBeforeMarking = ReportService.ToCsv(window.Analysis!);
+            var marked = window.ToggleCurrentSearchMark();
+            True(marked.IsMarked);
+            True(SearchVisual.GetIsMarked(firstRow));
+            Equal(analysisBeforeMarking, ReportService.ToCsv(window.Analysis!));
+            var next = window.MoveSearch(1);
+            Equal(1, next.Index);
+            True(!SearchVisual.GetIsCurrent(firstRow));
+
+            tabs.SelectedIndex = 4;
+            Layout(window);
+            var findingSearch = window.StartSearch("lookalike.test");
+            True(findingSearch.Count > 0);
+            var findingsList = (ListView)window.FindName("FindingsList");
+            var findingContainer = (ListViewItem)findingsList.ItemContainerGenerator.ContainerFromItem(findingsList.SelectedItem);
+            True(SearchVisual.GetIsCurrent(findingContainer));
+
+            tabs.SelectedIndex = 1;
+            Layout(window);
+
+            var darkSearch = new SmtpHeaderAnalyzer.SearchWindow(window);
+            ((TextBox)darkSearch.FindName("SearchTextBox")).Text = "mx.receiver.example";
+            ((Button)darkSearch.FindName("NextButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Render(window, Path.Combine(output, "smtp-header-analyzer-search-result-dark.png"));
+            Render(darkSearch, Path.Combine(output, "smtp-header-analyzer-search-dark.png"));
             var darkAbout = new SmtpHeaderAnalyzer.AboutWindow();
             Render(darkAbout, Path.Combine(output, "smtp-header-analyzer-about-dark.png"));
             AssertUpdateControlsFit(darkAbout);
             ThemeService.Apply(false);
             ((Button)window.FindName("ThemeButton")).Content = "Donker thema";
             Render(window, Path.Combine(output, "smtp-header-analyzer-light.png"));
+            Render(window, Path.Combine(output, "smtp-header-analyzer-search-result-light.png"));
+            var lightSearch = new SmtpHeaderAnalyzer.SearchWindow(window);
+            ((TextBox)lightSearch.FindName("SearchTextBox")).Text = "mx.receiver.example";
+            Render(lightSearch, Path.Combine(output, "smtp-header-analyzer-search-light.png"));
             var lightAbout = new SmtpHeaderAnalyzer.AboutWindow();
             Render(lightAbout, Path.Combine(output, "smtp-header-analyzer-about-light.png"));
             AssertUpdateControlsFit(lightAbout);
@@ -233,18 +300,25 @@ static void AssertUpdateControlsFit(SmtpHeaderAnalyzer.AboutWindow window)
 
 static void Render(Window window, string path)
 {
+    var (clientWidth, clientHeight) = Layout(window);
     var root = (FrameworkElement)window.Content;
-    var clientWidth = Math.Max(1, window.Width - (SystemParameters.ResizeFrameVerticalBorderWidth * 2));
-    var clientHeight = Math.Max(1, window.Height - SystemParameters.WindowCaptionHeight - (SystemParameters.ResizeFrameHorizontalBorderHeight * 2));
-    root.Measure(new Size(clientWidth, clientHeight));
-    root.Arrange(new Rect(0, 0, clientWidth, clientHeight));
-    root.UpdateLayout();
     var bitmap = new RenderTargetBitmap((int)Math.Ceiling(clientWidth), (int)Math.Ceiling(clientHeight), 96, 96, PixelFormats.Pbgra32);
     bitmap.Render(root);
     var encoder = new PngBitmapEncoder();
     encoder.Frames.Add(BitmapFrame.Create(bitmap));
     using var stream = File.Create(path);
     encoder.Save(stream);
+}
+
+static (double Width, double Height) Layout(Window window)
+{
+    var root = (FrameworkElement)window.Content;
+    var clientWidth = Math.Max(1, window.Width - (SystemParameters.ResizeFrameVerticalBorderWidth * 2));
+    var clientHeight = Math.Max(1, window.Height - SystemParameters.WindowCaptionHeight - (SystemParameters.ResizeFrameHorizontalBorderHeight * 2));
+    root.Measure(new Size(clientWidth, clientHeight));
+    root.Arrange(new Rect(0, 0, clientWidth, clientHeight));
+    root.UpdateLayout();
+    return (clientWidth, clientHeight);
 }
 
 static void Equal<T>(T expected, T actual)
